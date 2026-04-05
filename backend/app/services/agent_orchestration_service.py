@@ -4,66 +4,154 @@ import re
 from pydantic import ValidationError
 
 from app.clients.groq_client import GroqChatClient
-from app.models.llm_tool_decision import LlmToolDecision
-from app.prompts.prompt_factory import SYSTEM_PROMPT, build_user_prompt
+from app.models.llm_tool_decision import LlmToolDecision, ReactStep
+from app.prompts.prompt_factory import (
+    REACT_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    build_react_user_message,
+    build_user_prompt,
+)
 from app.services.tool_execution_service import ToolExecutionService
 
+
 class AgentOrchestrationService:
-    """Coordinates prompt creation, model call, parsing, and tool execution."""
+    max_steps = 10
+    max_memory_chars = 4500
+    stuck_repeat_limit = 2
 
     def __init__(
         self,
         groq_client: GroqChatClient,
         tool_execution_service: ToolExecutionService,
     ) -> None:
-        self.groq_client = groq_client
-        self.tool_execution_service = tool_execution_service
+        self.groq = groq_client
+        self.tools = tool_execution_service
 
     def run_once(self, user_request: str, prompt_style: str) -> dict:
+        """Week 1: single LLM call + one tool."""
         user_prompt = build_user_prompt(user_request=user_request, style=prompt_style)
-        llm_response_text = self.groq_client.complete_chat(
-            system_prompt=SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-        )
-        decision = self.parse_tool_decision_json(llm_response_text)
-        tool_result = self.tool_execution_service.execute_tool_by_name(decision)
-
-        print(
-            f"[agent_step] style={prompt_style} selected_tool={decision.tool_name} "
-            f"tool_success={tool_result.get('success')}"
-        )
-
+        llm_text = self.groq.complete_chat(SYSTEM_PROMPT, user_prompt)
+        decision = self._parse_json(llm_text, LlmToolDecision)
+        tool_result = self.tools.execute_tool_by_name(decision)
         return {
+            "mode": "once",
             "prompt_style": prompt_style,
-            "llm_response_text": llm_response_text,
+            "llm_response_text": llm_text,
             "selected_tool": decision.tool_name,
             "tool_result": tool_result,
         }
 
+    def run_react(self, user_request: str, prompt_style: str) -> dict:
+        """Week 2: ReAct loop with short-term memory, trim, stuck guard."""
+        memory_lines: list[str] = []
+        step_log: list[dict] = []
+        last_sig: str | None = None
+        repeats = 0
+
+        for step in range(1, self.max_steps + 1):
+            print(f"\n========== STEP {step}/{self.max_steps} ==========")
+            memory_text = self._trim_memory(memory_lines)
+            user_msg = build_react_user_message(user_request, prompt_style, memory_text)
+            llm_text = self.groq.complete_chat(REACT_SYSTEM_PROMPT, user_msg)
+            react = self._parse_json(llm_text, ReactStep)
+
+            print(f"THOUGHT: {react.thought}")
+            if react.subtasks:
+                print(f"SUBTASKS: {react.subtasks}")
+
+            if react.done:
+                print("DONE: goal complete (model signaled done=true).")
+                step_log.append(
+                    {
+                        "step": step,
+                        "thought": react.thought,
+                        "done": True,
+                        "final_reason": react.reason,
+                    }
+                )
+                return {
+                    "mode": "react",
+                    "prompt_style": prompt_style,
+                    "stopped": "done",
+                    "steps": step_log,
+                    "final_message": react.reason or react.thought,
+                }
+
+            decision = LlmToolDecision(
+                tool_name=react.tool_name,
+                arguments=react.arguments,
+                reason=react.reason,
+            )
+            sig = f"{react.tool_name}:{json.dumps(react.arguments, sort_keys=True)}"
+            if sig == last_sig:
+                repeats += 1
+            else:
+                repeats = 0
+                last_sig = sig
+            if repeats >= self.stuck_repeat_limit:
+                print("STUCK: same tool+arguments repeated too many times — stopping.")
+                step_log.append({"step": step, "thought": react.thought, "stuck": True})
+                return {
+                    "mode": "react",
+                    "prompt_style": prompt_style,
+                    "stopped": "stuck",
+                    "steps": step_log,
+                    "final_message": "Stuck: repeated identical action without progress.",
+                }
+
+            print(f"ACT: tool={react.tool_name} args={react.arguments}")
+            tool_result = self.tools.execute_tool_by_name(decision)
+            obs_short = json.dumps(tool_result, default=str)[:800]
+            print(f"OBSERVE: {obs_short}")
+
+            step_log.append(
+                {
+                    "step": step,
+                    "thought": react.thought,
+                    "tool_name": react.tool_name,
+                    "arguments": react.arguments,
+                    "observation": tool_result,
+                }
+            )
+            memory_lines.append(
+                f"Step {step} | thought: {react.thought[:200]} | tool: {react.tool_name} | "
+                f"ok: {tool_result.get('success')} | note: {str(tool_result.get('message', ''))[:120]}"
+            )
+
+        print(f"MAX STEPS ({self.max_steps}) reached — stopping.")
+        return {
+            "mode": "react",
+            "prompt_style": prompt_style,
+            "stopped": "max_steps",
+            "steps": step_log,
+            "final_message": "Stopped after max steps.",
+        }
+
+    def _trim_memory(self, lines: list[str]) -> str:
+        text = "\n".join(lines)
+        if len(text) <= self.max_memory_chars:
+            return text
+        return text[-self.max_memory_chars :]
+
     @staticmethod
     def format_output(result: dict) -> str:
-        return json.dumps(result, indent=2)
+        return json.dumps(result, indent=2, default=str)
 
     @staticmethod
-    def parse_tool_decision_json(response_text: str) -> LlmToolDecision:
-        cleaned_text = response_text.strip()
-        json_payload = AgentOrchestrationService._extract_json(cleaned_text)
+    def _parse_json(text: str, model_class: type):
+        raw = text.strip()
+        if raw.startswith("{") and raw.endswith("}"):
+            payload = raw
+        else:
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            if not m:
+                raise ValueError("No JSON object found in model response")
+            payload = m.group(0)
         try:
-            parsed_dict = json.loads(json_payload)
+            data = json.loads(payload)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON from model: {exc}") from exc
-
         try:
-            return LlmToolDecision.model_validate(parsed_dict)
+            return model_class.model_validate(data)
         except ValidationError as exc:
             raise ValueError(f"JSON schema validation failed: {exc}") from exc
-
-    @staticmethod
-    def _extract_json(response_text: str) -> str:
-        if response_text.startswith("{") and response_text.endswith("}"):
-            return response_text
-
-        match = re.search(r"\{.*\}", response_text, re.DOTALL)
-        if match:
-            return match.group(0)
-        raise ValueError("No JSON object found in model response")

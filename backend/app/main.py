@@ -10,43 +10,41 @@ from app.services.agent_orchestration_service import AgentOrchestrationService
 from app.services.tool_execution_service import ToolExecutionService
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Week 1 AI automation agent")
-    parser.add_argument("--request", required=True, help="Plain English request")
-    parser.add_argument(
+def main() -> None:
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+    p = argparse.ArgumentParser(description="Week 1–2 automation agent")
+    p.add_argument("--request", required=True)
+    p.add_argument(
         "--prompt-style",
         default="zero-shot",
         choices=["zero-shot", "few-shot", "cot"],
-        help="Prompt style for experiment",
     )
-    return parser.parse_args()
-
-
-def main() -> None:
-    backend_dir = Path(__file__).resolve().parents[1]
-    load_dotenv(backend_dir / ".env")
-    args = parse_args()
+    p.add_argument(
+        "--mode",
+        default="react",
+        choices=["once", "react"],
+        help="once=single tool call (Week 1); react=ReAct loop (Week 2)",
+    )
+    args = p.parse_args()
 
     settings = get_settings()
-    orchestrator = AgentOrchestrationService(
-        groq_client=GroqChatClient(settings=settings),
-        tool_execution_service=ToolExecutionService(settings=settings),
+    orch = AgentOrchestrationService(
+        GroqChatClient(settings=settings),
+        ToolExecutionService(settings=settings),
     )
 
+    print(f"[start] mode={args.mode} prompt_style={args.prompt_style}")
     try:
-        print(f"Running agent with prompt style: {args.prompt_style}")
-        result = orchestrator.run_once(
-            user_request=args.request,
-            prompt_style=args.prompt_style,
-        )
-        print(orchestrator.format_output(result))
+        if args.mode == "once":
+            out = orch.run_once(args.request, args.prompt_style)
+        else:
+            out = orch.run_react(args.request, args.prompt_style)
+        print("\n--- RESULT (JSON) ---")
+        print(orch.format_output(out))
     except Exception as exc:
-        print(f"Agent failed: {exc}")
-        error_payload = {
-            "success": False,
-            "message": str(exc),
-        }
-        print(json.dumps(error_payload, indent=2))
+        print(f"[error] {exc}")
+        print(json.dumps({"success": False, "message": str(exc)}, indent=2))
 
 
 if __name__ == "__main__":

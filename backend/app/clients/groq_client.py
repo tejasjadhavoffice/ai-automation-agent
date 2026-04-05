@@ -5,17 +5,7 @@ from groq import Groq
 from app.config.settings import AppSettings
 
 
-class RetryableApiError(Exception):
-    """Raised for retryable API errors."""
-
-    def __init__(self, status_code: int, message: str) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-
-
 class GroqChatClient:
-    """Handles Groq chat calls with retry and backoff."""
-
     model_name = "openai/gpt-oss-120b"
     temperature = 0.2
     top_p = 1.0
@@ -30,7 +20,7 @@ class GroqChatClient:
     def complete_chat(self, system_prompt: str, user_prompt: str) -> str:
         for attempt in range(1, self.max_retries + 1):
             try:
-                response = self.client.chat.completions.create(
+                r = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -40,25 +30,26 @@ class GroqChatClient:
                     top_p=self.top_p,
                     timeout=self.request_timeout_seconds,
                 )
-                return response.choices[0].message.content or ""
+                return r.choices[0].message.content or ""
             except Exception as exc:
-                if not self._is_retryable_exception(exc):
+                if not self._retryable(exc) or attempt >= self.max_retries:
                     raise
-                if attempt >= self.max_retries:
-                    raise
-                delay_seconds = self.retry_base_delay_seconds * (2 ** (attempt - 1))
-                time.sleep(delay_seconds)
-
-        raise RuntimeError("Unexpected retry loop termination")
+                delay = self.retry_base_delay_seconds * (2 ** (attempt - 1))
+                print(
+                    f"[groq_retry] attempt {attempt}/{self.max_retries} "
+                    f"sleep {delay:.1f}s err={type(exc).__name__}"
+                )
+                time.sleep(delay)
+        raise RuntimeError("retry loop ended unexpectedly")
 
     @staticmethod
-    def _is_retryable_exception(exc: Exception) -> bool:
-        if isinstance(exc, (TimeoutError, RetryableApiError)):
+    def _retryable(exc: Exception) -> bool:
+        if isinstance(exc, TimeoutError):
             return True
-        status_code = getattr(exc, "status_code", None)
-        if status_code == 429:
+        code = getattr(exc, "status_code", None)
+        if code == 429:
             return True
-        if isinstance(status_code, int) and 500 <= status_code <= 599:
+        if isinstance(code, int) and 500 <= code <= 599:
             return True
-        message = str(exc).lower()
-        return "timeout" in message or "timed out" in message
+        msg = str(exc).lower()
+        return "timeout" in msg or "timed out" in msg
