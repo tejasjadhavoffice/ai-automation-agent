@@ -1,5 +1,34 @@
-backend/venv/
-backend/.env
-backend/__pycache__/
-backend/.ipynb_checkpoints/
-backend/**/*.pyc
+# Virtual environment
+venv/
+
+# Secrets — never commit
+.env
+.env.*
+
+# Python
+__pycache__/
+**/*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Week 3 — generated / runtime (sample data stays tracked: data/sales_data.txt, data/tasks.txt)
+logs/
+data/reports/
+data/processed_tasks.txt
+
+# IDE
+.vscode/
+.idea/
+
+# Local / personal documents
+*.docx

@@ -41,6 +41,10 @@ REACT_SYSTEM_PROMPT = dedent(
       and put a short final summary in "reason".
     - One tool per response. After tools run, you will see observations — plan the next tool.
     - If you cannot proceed, use no_tool with explanation in "reason".
+    - IMPORTANT: When passing data between steps, copy the ACTUAL content from the observation
+      into the next tool's arguments. Never use placeholder text like "content from previous step".
+      Example: if read_file returns {"data": {"content": "hello world"}}, then pass
+      {"text": "hello world"} to summarise_text — copy the real text, not a description of it.
     """
 ).strip()
 

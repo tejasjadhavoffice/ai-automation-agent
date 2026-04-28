@@ -1,12 +1,12 @@
 import time
+import logging
 
 from groq import Groq
 
 from app.config.settings import AppSettings
 
-
 class GroqChatClient:
-    model_name = "openai/gpt-oss-120b"
+    model_name = "llama-3.1-8b-instant"
     temperature = 0.2
     top_p = 1.0
     request_timeout_seconds = 30.0
@@ -14,12 +14,14 @@ class GroqChatClient:
     retry_base_delay_seconds = 1.0
 
     def __init__(self, settings: AppSettings) -> None:
+        self.logger = logging.getLogger(self.__class__.__name__)
         self.settings = settings
         self.client = Groq(api_key=settings.groq_api_key)
 
     def complete_chat(self, system_prompt: str, user_prompt: str) -> str:
         for attempt in range(1, self.max_retries + 1):
             try:
+                self.logger.debug("Calling Groq model=%s attempt=%s", self.model_name, attempt)
                 r = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=[
@@ -35,9 +37,12 @@ class GroqChatClient:
                 if not self._retryable(exc) or attempt >= self.max_retries:
                     raise
                 delay = self.retry_base_delay_seconds * (2 ** (attempt - 1))
-                print(
-                    f"[groq_retry] attempt {attempt}/{self.max_retries} "
-                    f"sleep {delay:.1f}s err={type(exc).__name__}"
+                self.logger.info(
+                    "Groq retry attempt=%s/%s sleep=%.1fs err=%s",
+                    attempt,
+                    self.max_retries,
+                    delay,
+                    type(exc).__name__,
                 )
                 time.sleep(delay)
         raise RuntimeError("retry loop ended unexpectedly")

@@ -8,7 +8,6 @@ AllowedToolName = Literal[
 
 
 class LlmToolDecision(BaseModel):
-    """Single tool call (Week 1 and executor)."""
 
     tool_name: AllowedToolName
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -20,11 +19,9 @@ class LlmToolDecision(BaseModel):
             raise ValueError("reason is required when tool_name is no_tool")
         return self
 
-
 class ReactStep(BaseModel):
-    """One ReAct iteration: think -> maybe act -> observe (Week 2)."""
 
-    thought: str
+    thought: str = ""          # LLM sometimes omits this — default to empty string
     subtasks: list[str] = Field(default_factory=list)
     done: bool = False
     tool_name: AllowedToolName

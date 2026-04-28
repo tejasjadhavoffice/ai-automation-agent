@@ -1,0 +1,5 @@
+Read the weekly sales report from data/sales_data.txt
+Summarise the latest financial data from the sales file
+Fetch latest post from https://jsonplaceholder.typicode.com/posts/1
+Send weekly summary email to the team
+Summarise team meeting notes from data/sales_data.txt

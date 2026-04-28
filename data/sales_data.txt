@@ -1,0 +1,23 @@
+Sales Data — April 2026
+
+Region: North
+- Product A: 320 units sold, Revenue: $16,000
+- Product B: 210 units sold, Revenue: $10,500
+- Product C: 150 units sold, Revenue: $7,500
+Total North: 680 units, $34,000
+
+Region: South
+- Product A: 280 units sold, Revenue: $14,000
+- Product B: 390 units sold, Revenue: $19,500
+- Product C: 110 units sold, Revenue: $5,500
+Total South: 780 units, $39,000
+
+Region: East
+- Product A: 450 units sold, Revenue: $22,500
+- Product B: 175 units sold, Revenue: $8,750
+- Product C: 230 units sold, Revenue: $11,500
+Total East: 855 units, $42,750
+
+Overall Total: 2,315 units sold, $115,750 revenue
+Top Seller: Product A in East region
+Lowest Seller: Product C in South region
