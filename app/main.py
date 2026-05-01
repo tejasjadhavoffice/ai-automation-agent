@@ -26,8 +26,8 @@ class AgentCli:
         parser.add_argument(
             "--mode",
             default="react",
-            choices=["once", "react"],
-            help="once = one LLM + one tool; react = multi-step loop",
+            choices=["once", "react", "week4"],
+            help="once = single tool; react = Week 2 loop; week4 = production loop with guardrails",
         )
         parser.add_argument(
             "--log-level",

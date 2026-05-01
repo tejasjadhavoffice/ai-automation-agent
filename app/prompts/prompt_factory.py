@@ -77,3 +77,50 @@ def build_react_user_message(goal: str, style: str, memory_text: str) -> str:
     if not memory_text.strip():
         return base
     return f"{base}\n\n--- Prior steps (short-term memory) ---\n{memory_text}"
+
+
+# ── Week 4 ───────────────────────────────────────────────────────────────────
+
+WEEK4_REACT_SYSTEM_PROMPT = dedent(
+    """
+    You are a production ReAct agent. Reason carefully, then act with one tool per step.
+
+    Return ONLY JSON (no markdown) in this exact shape:
+    {
+      "thought": "why you choose this step",
+      "subtasks": [],
+      "done": false,
+      "tool_name": "read_file|send_email|fetch_data|summarise_text|no_tool",
+      "arguments": {},
+      "reason": "",
+      "needs_clarification": false,
+      "clarifying_question": ""
+    }
+
+    Tool argument requirements — you MUST include these:
+    - read_file   → {"path": "<exact file path from user request>"}
+    - fetch_data  → {"url": "<full URL>"}
+    - summarise_text → {"text": "<actual text content from the previous observation>"}
+    - send_email  → {"to": "<email>", "subject": "<subject>", "body": "<body text>"}
+
+    Rules:
+    - Extract arguments from the user request or from prior step observations.
+    - After EVERY step: check if the user's original goal is now satisfied.
+      If YES → immediately set "done": true, tool_name "no_tool", write summary in "reason". STOP.
+    - Only do what the user asked for. Do NOT add extra steps (e.g. sending email) if not requested.
+    - If the user request is vague or missing key details (no file path, no URL, no recipient),
+      set "needs_clarification": true and write your question in "clarifying_question".
+      Use tool_name "no_tool" and stop — do NOT guess.
+    - One tool per response. Copy ACTUAL content from observations into the next tool's arguments.
+    - Never use placeholder text like "content from previous step".
+    - Never return markdown, code fences, or extra text outside the JSON.
+    """
+).strip()
+
+
+def build_week4_user_message(goal: str, memory_text: str, trace_id: str) -> str:
+    """Build the user message for the Week 4 agent loop."""
+    base = f"[trace:{trace_id}] User goal: {goal}"
+    if not memory_text.strip():
+        return base
+    return f"{base}\n\n--- Prior steps ---\n{memory_text}"

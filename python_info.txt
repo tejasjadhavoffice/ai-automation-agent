@@ -1,22 +1,27 @@
-Python is one of the most popular programming languages. It’s simple to use, packed with features and supported by a wide range of libraries and frameworks. Its clean syntax makes it beginner-friendly.
+PYTHON PROGRAMMING
 
-A high-level language, used in data science, automation, AI, web development and more.
-Known for its readability, which means code is easier to write, understand and maintain.
-Backed by strong library support, we don’t have to build everything from scratch.
-Functions
-In this section of Python 3 tutorial we'll explore Python function syntax, parameter handling,
-return values and variable scope. Along the way, we'll also introduce versatile functions
-like range(), map, filter and lambda functions.
-Data Structures
-Python offers versatile collections of data types, including lists, string, tuples, sets,
-dictionaries and arrays. In this section, we will learn about each data types in detail.
-OOP Concepts
-In this section, we'll explore the core principles of object-oriented programming (OOP) in Python.
-From encapsulation to inheritance, polymorphism, abstract classes and iterators, we'll cover the 
-essential concepts that helps you to build modular, reusable and scalable code.
-Exception Handling
-In this section, we'll explore Python Exception Handling that how Python deals with unexpected errors,
-enabling us to write fault-tolerant code. We'll cover file handling, including reading from and writing to files.
+A popular, beginner-friendly language used in data science, AI, automation, and web development. 
+Known for clean syntax, readability, and strong library support.
 
+FUNCTIONS
+Explore function syntax, parameters, return values, and variable scope. Includes range(), 
+map, filter, and lambda functions.
 
+DATA STRUCTURES
+Covers lists, strings, tuples, sets, dictionaries, and arrays in detail.
 
+OOP CONCEPTS
+Learn encapsulation, inheritance, polymorphism, abstract classes, and iterators to build 
+modular, reusable code.
+
+EXCEPTION HANDLING
+How Python deals with errors to write fault-tolerant code, plus file reading and writing.
+
+FILE HANDLING
+Opening, reading, writing, and closing files using different modes and the 'with' statement.
+
+MODULES AND PACKAGES
+Organizing code with built-in and custom modules, plus managing third-party packages using pip.
+
+DECORATORS AND GENERATORS
+Modify function behavior with decorators and handle large data efficiently with generators.

@@ -86,3 +86,33 @@ class GuardrailChecker:
         if result.validation_passed:
             return True, "OK"
         return False, str(result.error)
+
+    def check_tool_decision(self, tool_name: str, arguments: dict) -> tuple[bool, str]:
+        """
+        Week 4 guardrail — called at every output-to-action boundary in run_week4().
+
+        Checks two things:
+          1. tool_name is one of the allowed values (reuses TaskAssignment model).
+          2. Required arguments for that tool are present and non-empty.
+
+        Returns (True, "OK") if valid, (False, reason) if not.
+        """
+        # Step 1: validate tool name
+        ok, msg = self.check_task_assignment(tool_name)
+        if not ok:
+            return False, msg
+
+        # Step 2: validate required arguments per tool
+        required: dict[str, list[str]] = {
+            "read_file": ["path"],
+            "fetch_data": ["url"],
+            "summarise_text": ["text"],
+            "send_email": ["to", "subject", "body"],
+        }
+        needed = required.get(tool_name, [])
+        for key in needed:
+            val = arguments.get(key, "")
+            if not isinstance(val, str) or not val.strip():
+                return False, f"'{tool_name}' requires non-empty argument '{key}'"
+
+        return True, "OK"

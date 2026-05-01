@@ -48,11 +48,13 @@ class AutomationAgent:
 
     def run(self, user_request: str, mode: str, prompt_style: str) -> dict:
         """
-        Run Week 1 (`once`) or Week 2 (`react`) flow. Returns the same dict as before.
+        Run Week 1 (`once`), Week 2 (`react`), or Week 4 (`week4`) flow.
         """
         self.logger.info("Run requested with mode=%s prompt_style=%s", mode, prompt_style)
         if mode == "once":
             return self.orchestrator.run_once(user_request, prompt_style)
+        if mode == "week4":
+            return self.orchestrator.run_week4(user_request)
         return self.orchestrator.run_react(user_request, prompt_style)
 
     def run_workflow(self, workflow_name: str) -> dict:

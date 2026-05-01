@@ -16,23 +16,29 @@ def configure_logging(level_name: str = "INFO") -> None:
     )
 
 
-def log_step(workflow: str, step: str, input_data: str, output: str, decision: str) -> None:
+def log_step(
+    workflow: str,
+    step: str,
+    input_data: str,
+    output: str,
+    decision: str,
+    trace_id: str = "",
+) -> None:
     """
     Write one structured JSON line to logs/agent_steps.jsonl.
 
-    Every workflow step calls this so we have full observability:
-    what went in, what came out, and what decision was made.
-
     Args:
-        workflow: name of the workflow (e.g. "ReportWorkflow")
-        step:     name of the step  (e.g. "guardrail", "save_report")
+        workflow:   name of the workflow / agent (e.g. "Week4Agent")
+        step:       name of the step (e.g. "guardrail", "tool_exec")
         input_data: what the step received (truncated to 300 chars)
-        output:   what the step produced  (truncated to 300 chars)
-        decision: short label for what happened (e.g. "OK", "skipped", "error")
+        output:     what the step produced  (truncated to 300 chars)
+        decision:   short label for what happened ("OK", "skipped", "error")
+        trace_id:   Week 4 — short run ID so you can follow one run in the logs
     """
     LOG_DIR.mkdir(exist_ok=True)
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "trace_id": trace_id,
         "workflow": workflow,
         "step": step,
         "input": str(input_data)[:300],

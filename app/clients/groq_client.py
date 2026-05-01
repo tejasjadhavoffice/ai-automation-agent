@@ -6,7 +6,9 @@ from groq import Groq
 from app.config.settings import AppSettings
 
 class GroqChatClient:
+    # Week 1-3 use the fast small model; Week 4 overrides with the smarter model
     model_name = "llama-3.1-8b-instant"
+    week4_model_name = "llama-3.3-70b-versatile"
     temperature = 0.2
     top_p = 1.0
     request_timeout_seconds = 30.0
@@ -18,12 +20,13 @@ class GroqChatClient:
         self.settings = settings
         self.client = Groq(api_key=settings.groq_api_key)
 
-    def complete_chat(self, system_prompt: str, user_prompt: str) -> str:
+    def complete_chat(self, system_prompt: str, user_prompt: str, use_week4_model: bool = False) -> str:
+        model = self.week4_model_name if use_week4_model else self.model_name
         for attempt in range(1, self.max_retries + 1):
             try:
-                self.logger.debug("Calling Groq model=%s attempt=%s", self.model_name, attempt)
+                self.logger.debug("Calling Groq model=%s attempt=%s", model, attempt)
                 r = self.client.chat.completions.create(
-                    model=self.model_name,
+                    model=model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
