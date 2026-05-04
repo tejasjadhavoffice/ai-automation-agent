@@ -3,8 +3,8 @@ base_workflow.py
 
 Parent class that all Week 3 workflows inherit from.
 Provides two shared features:
-  1. Idempotency  — _output_exists() checks if we already ran this workflow today.
-  2. Output saving — _save_output() writes the result to data/reports/.
+  1. Idempotency  — _is_already_processed() checks if we already ran this workflow today.
+  2. Output saving — _save_result_to_file() writes the result to data/reports/.
 """
 
 from abc import ABC, abstractmethod
@@ -29,7 +29,7 @@ class BaseWorkflow(ABC):
     def run(self) -> dict:
         """Each workflow must implement this. Returns a result dict."""
 
-    def _output_exists(self, filename: str) -> bool:
+    def _is_already_processed(self, filename: str) -> bool:
         """
         Idempotency check.
         If the output file already exists, the workflow was already run.
@@ -37,6 +37,6 @@ class BaseWorkflow(ABC):
         """
         return (self.output_dir / filename).exists()
 
-    def _save_output(self, filename: str, content: str) -> None:
+    def _save_result_to_file(self, filename: str, content: str) -> None:
         """Write workflow output to data/reports/<filename>."""
         (self.output_dir / filename).write_text(content, encoding="utf-8")

@@ -1,277 +1,211 @@
+"""
+agent_orchestration_service.py — The brain of the agent.
+
+Two modes:
+  run_once()  → Week 1: single LLM call + one tool (uses bind_tools)
+  run_react() → Week 2/4: multi-step ReAct loop (uses LangGraph + MemorySaver)
+
+Why LangGraph instead of a manual while-loop?
+  - create_react_agent() implements the full ReAct pattern in ~5 lines
+  - MemorySaver gives short-term memory across steps automatically
+  - Built-in recursion_limit replaces our manual max_steps guard
+  - Tool dispatch is automatic — no manual dictionary needed
+"""
+
 import json
 import logging
-import re
 import uuid
 
-from pydantic import ValidationError
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_groq import ChatGroq
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
 
-from app.clients.groq_client import GroqChatClient
-from app.guardrails.guardrail_checker import GuardrailChecker
-from app.logging_setup import log_step
-from app.models.llm_tool_decision import LlmToolDecision, ReactStep
-
+from app.guardrails.guardrail_checker import GuardrailOutputValidationService
+from app.logging_setup import log_agent_step
 from app.prompts.prompt_factory import (
     REACT_SYSTEM_PROMPT,
-    SYSTEM_PROMPT,
-    WEEK4_REACT_SYSTEM_PROMPT,
-    build_react_user_message,
-    build_user_prompt,
-    build_week4_user_message,
+    SINGLE_TOOL_SYSTEM_PROMPT,
+    build_styled_user_prompt,
 )
-from app.services.tool_execution_service import ToolExecutionService
+
+MAX_STEP_RESULT_CHARS = 500
+MAX_STEP_LOG_CHARS = 300
+MAX_STEP_ARGS_CHARS = 200
+
+logger = logging.getLogger(__name__)
 
 
 class AgentOrchestrationService:
-    max_steps = 5
-    max_memory_chars = 4500
-    stuck_repeat_limit = 2
+    """
+    Orchestrates the agent's reasoning and tool execution.
 
-    def __init__(
-        self,
-        groq_client: GroqChatClient,
-        tool_execution_service: ToolExecutionService,
-    ) -> None:
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.groq = groq_client
-        self.tools = tool_execution_service
+    Attributes:
+        max_react_steps: max tool calls the ReAct agent can make before stopping.
+        memory:          MemorySaver gives short-term memory within a conversation thread.
+        checker:         GuardrailOutputValidationService validates tool decisions at every step boundary.
+    """
 
-    def run_once(self, user_request: str, prompt_style: str) -> dict:
-        """Week 1: single LLM call + one tool."""
-        self.logger.info("run_once started")
-        user_prompt = build_user_prompt(user_request=user_request, style=prompt_style)
-        llm_text = self.groq.complete_chat(SYSTEM_PROMPT, user_prompt)
-        decision = self._parse_json(llm_text, LlmToolDecision)
-        self.logger.debug("run_once selected tool=%s", decision.tool_name)
-        tool_result = self.tools.execute_tool_by_name(decision)
+    def __init__(self, llm_fast: ChatGroq, llm_react: ChatGroq, tools: list, max_steps: int = 5) -> None:
+        self.llm_fast = llm_fast
+        self.llm_react = llm_react
+        self.tools = tools
+        self.max_react_steps = max_steps
+        self.memory = MemorySaver()
+        self.checker = GuardrailOutputValidationService()
+
+    # ── Week 1: single tool call ──────────────────────────────────────────────
+
+    def execute_single_tool(self, user_request: str, prompt_style: str) -> dict:
+        """
+        Week 1 mode: one LLM call → picks one tool → executes it → returns result.
+
+        Uses LangChain's bind_tools() for native function calling.
+        """
+        logger.info("execute_single_tool started — prompt_style=%s", prompt_style)
+
+        llm_with_tools = self.llm_fast.bind_tools(self.tools)
+        user_prompt = build_styled_user_prompt(user_request, prompt_style)
+
+        response = llm_with_tools.invoke([
+            SystemMessage(content=SINGLE_TOOL_SYSTEM_PROMPT),
+            HumanMessage(content=user_prompt),
+        ])
+
+        if not response.tool_calls:
+            return {"mode": "once", "message": response.content}
+
+        tool_call = response.tool_calls[0]
+        tool_name = tool_call["name"]
+        tool_args = tool_call["args"]
+
+        # Guardrail: validate tool name + arguments before execution
+        ok, msg = self.checker.validate_tool_decision(tool_name, tool_args)
+        if not ok:
+            logger.warning("Guardrail blocked: %s", msg)
+            return {"mode": "once", "error": f"Guardrail blocked: {msg}"}
+
+        tool_map = {t.name: t for t in self.tools}
+        tool = tool_map.get(tool_name)
+        if not tool:
+            return {"mode": "once", "error": f"Unknown tool: {tool_name}"}
+
+        result = tool.invoke(tool_args)
+        logger.info("execute_single_tool tool=%s result_len=%d", tool_name, len(str(result)))
+
         return {
             "mode": "once",
             "prompt_style": prompt_style,
-            "llm_response_text": llm_text,
-            "selected_tool": decision.tool_name,
-            "tool_result": tool_result,
+            "selected_tool": tool_name,
+            "arguments": tool_args,
+            "tool_result": result,
         }
 
-    def run_react(self, user_request: str, prompt_style: str) -> dict:
-        """Week 2: ReAct loop with short-term memory, trim, stuck guard."""
-        self.logger.info("run_react started")
-        memory_lines: list[str] = []
-        step_log: list[dict] = []
-        last_sig: str | None = None
-        repeats = 0
+    # ── Week 2/4: ReAct loop via LangGraph ────────────────────────────────────
 
-        for step in range(1, self.max_steps + 1):
-            self.logger.info("STEP %s/%s", step, self.max_steps)
-            memory_text = self._trim_memory(memory_lines)
-            user_msg = build_react_user_message(user_request, prompt_style, memory_text)
-            llm_text = self.groq.complete_chat(REACT_SYSTEM_PROMPT, user_msg)
-            react = self._parse_json(llm_text, ReactStep)
-
-            self.logger.info("THOUGHT: %s", react.thought)
-            if react.subtasks:
-                self.logger.info("SUBTASKS: %s", react.subtasks)
-
-            if react.done:
-                self.logger.info("DONE signaled by model")
-                step_log.append(
-                    {
-                        "step": step,
-                        "thought": react.thought,
-                        "done": True,
-                        "final_reason": react.reason,
-                    }
-                )
-                return {
-                    "mode": "react",
-                    "prompt_style": prompt_style,
-                    "stopped": "done",
-                    "steps": step_log,
-                    "final_message": react.reason or react.thought,
-                }
-
-            decision = LlmToolDecision(
-                tool_name=react.tool_name,
-                arguments=react.arguments,
-                reason=react.reason,
-            )
-            sig = f"{react.tool_name}:{json.dumps(react.arguments, sort_keys=True)}"
-            if sig == last_sig:
-                repeats += 1
-            else:
-                repeats = 0
-                last_sig = sig
-            if repeats >= self.stuck_repeat_limit:
-                self.logger.warning("STUCK: same tool+arguments repeated")
-                step_log.append({"step": step, "thought": react.thought, "stuck": True})
-                return {
-                    "mode": "react",
-                    "prompt_style": prompt_style,
-                    "stopped": "stuck",
-                    "steps": step_log,
-                    "final_message": "Stuck: repeated identical action without progress.",
-                }
-
-            self.logger.info("ACT: tool=%s args=%s", react.tool_name, react.arguments)
-            tool_result = self.tools.execute_tool_by_name(decision)
-            obs_short = json.dumps(tool_result, default=str)[:800]
-            self.logger.info("OBSERVE: %s", obs_short)
-
-            step_log.append(
-                {
-                    "step": step,
-                    "thought": react.thought,
-                    "tool_name": react.tool_name,
-                    "arguments": react.arguments,
-                    "observation": tool_result,
-                }
-            )
-            # Store the observation data so the LLM can use it in the next step.
-            # We include the actual data payload (truncated) so the agent can
-            # pass file content, API responses, etc. to the next tool.
-            obs_data = json.dumps(tool_result.get("data", {}), default=str)[:1200]
-            memory_lines.append(
-                f"Step {step} | tool: {react.tool_name} | ok: {tool_result.get('success')} "
-                f"| thought: {react.thought[:150]} "
-                f"| observation_data: {obs_data}"
-            )
-
-        self.logger.warning("MAX STEPS reached: %s", self.max_steps)
-        return {
-            "mode": "react",
-            "prompt_style": prompt_style,
-            "stopped": "max_steps",
-            "steps": step_log,
-            "final_message": "Stopped after max steps.",
-        }
-
-    def run_week4(self, user_request: str) -> dict:
+    def execute_multi_step_agent(self, user_request: str) -> dict:
         """
-        Week 4: Production ReAct loop.
+        Week 2/4 mode: multi-step ReAct loop using LangGraph.
 
-        New features vs run_react():
-          1. trace_id — short ID stamped on every log line for this run.
-          2. Ambiguity check — if LLM sets needs_clarification=True, stop and
-             print the question. User must rerun with a clearer request.
-          3. Guardrail at every output→action boundary — validates tool_name
-             and required arguments BEFORE executing any tool.
+        Flow (handled by LangGraph automatically):
+          1. REASON — LLM thinks and picks a tool (AIMessage with tool_calls)
+          2. ACT    — LangGraph executes the tool (ToolMessage with result)
+          3. OBSERVE — result added to conversation history (MemorySaver)
+          4. REPEAT  — LLM sees result and decides next step
+          5. DONE   — LLM responds with text (no tool_calls) = finished
+
+        Added on top of LangGraph:
+          - trace_id for observability (every step logged to JSONL)
+          - Guardrail validation of every tool call in message history
+          - recursion_limit prevents infinite loops
         """
         trace_id = uuid.uuid4().hex[:6]
-        self.logger.info("[%s] Week4 run started | request: %s", trace_id, user_request[:80])
-        log_step("Week4Agent", "start", user_request, "", "started", trace_id=trace_id)
+        logger.info("[%s] execute_multi_step_agent started", trace_id)
+        log_agent_step("ReactAgent", "start", user_request, "", "started", trace_id=trace_id)
 
-        checker = GuardrailChecker()
-        memory_lines: list[str] = []
-        step_log: list[dict] = []
-        last_sig: str | None = None
-        repeats = 0
+        agent = create_react_agent(
+            self.llm_react,
+            self.tools,
+            prompt=REACT_SYSTEM_PROMPT,
+            checkpointer=self.memory,
+        )
 
-        for step in range(1, self.max_steps + 1):
-            self.logger.info("[%s] STEP %s/%s", trace_id, step, self.max_steps)
+        config = {
+            "configurable": {"thread_id": trace_id},
+            "recursion_limit": self.max_react_steps * 2 + 2,
+        }
 
-            # Build prompt with short-term memory
-            memory_text = self._trim_memory(memory_lines)
-            user_msg = build_week4_user_message(user_request, memory_text, trace_id)
-
-            # Call LLM — Week 4 uses the smarter 70b model for better instruction-following
-            llm_text = self.groq.complete_chat(WEEK4_REACT_SYSTEM_PROMPT, user_msg, use_week4_model=True)
-            react = self._parse_json(llm_text, ReactStep)
-
-            self.logger.info("[%s] THOUGHT: %s", trace_id, react.thought)
-            log_step("Week4Agent", f"step_{step}_thought", user_request[:100], react.thought, "thinking", trace_id=trace_id)
-
-            # ── Ambiguity check (Week 4 new feature) ──────────────────────────
-            if react.needs_clarification:
-                self.logger.info("[%s] CLARIFICATION NEEDED: %s", trace_id, react.clarifying_question)
-                log_step("Week4Agent", "clarification", user_request[:100], react.clarifying_question, "needs_clarification", trace_id=trace_id)
-                return {
-                    "trace_id": trace_id,
-                    "stopped": "needs_clarification",
-                    "clarifying_question": react.clarifying_question,
-                    "message": f"Agent needs more info: {react.clarifying_question}",
-                }
-
-            # ── Done ──────────────────────────────────────────────────────────
-            if react.done:
-                self.logger.info("[%s] DONE", trace_id)
-                log_step("Week4Agent", "done", "", react.reason, "done", trace_id=trace_id)
-                step_log.append({"step": step, "thought": react.thought, "done": True, "final_reason": react.reason})
-                return {
-                    "trace_id": trace_id,
-                    "stopped": "done",
-                    "steps": step_log,
-                    "final_message": react.reason or react.thought,
-                }
-
-            # ── Guardrail at output→action boundary (Week 4 new feature) ──────
-            ok, guard_msg = checker.check_tool_decision(react.tool_name, react.arguments)
-            log_step("Week4Agent", f"step_{step}_guardrail", react.tool_name, str(ok), guard_msg, trace_id=trace_id)
-            if not ok:
-                self.logger.warning("[%s] GUARDRAIL BLOCKED: %s", trace_id, guard_msg)
-                step_log.append({"step": step, "thought": react.thought, "guardrail_blocked": guard_msg})
-                return {
-                    "trace_id": trace_id,
-                    "stopped": "guardrail_blocked",
-                    "steps": step_log,
-                    "final_message": f"Guardrail blocked: {guard_msg}",
-                }
-
-            # ── Stuck guard ───────────────────────────────────────────────────
-            sig = f"{react.tool_name}:{json.dumps(react.arguments, sort_keys=True)}"
-            if sig == last_sig:
-                repeats += 1
-            else:
-                repeats = 0
-                last_sig = sig
-            if repeats >= self.stuck_repeat_limit:
-                self.logger.warning("[%s] STUCK", trace_id)
-                log_step("Week4Agent", "stuck", sig, "", "stuck", trace_id=trace_id)
-                return {"trace_id": trace_id, "stopped": "stuck", "steps": step_log, "final_message": "Stuck — repeated identical action."}
-
-            # ── Execute tool ──────────────────────────────────────────────────
-            decision = LlmToolDecision(tool_name=react.tool_name, arguments=react.arguments, reason=react.reason)
-            self.logger.info("[%s] ACT: tool=%s", trace_id, react.tool_name)
-            tool_result = self.tools.execute_tool_by_name(decision)
-
-            obs_short = json.dumps(tool_result, default=str)[:800]
-            self.logger.info("[%s] OBSERVE: %s", trace_id, obs_short[:200])
-            log_step("Week4Agent", f"step_{step}_tool_{react.tool_name}", str(react.arguments)[:200], obs_short[:300], str(tool_result.get("success")), trace_id=trace_id)
-
-            step_log.append({"step": step, "thought": react.thought, "tool_name": react.tool_name, "arguments": react.arguments, "observation": tool_result})
-
-            obs_data = json.dumps(tool_result.get("data", {}), default=str)[:1200]
-            memory_lines.append(
-                f"Step {step} | tool: {react.tool_name} | ok: {tool_result.get('success')} "
-                f"| thought: {react.thought[:150]} | data: {obs_data}"
+        try:
+            result = agent.invoke(
+                {"messages": [HumanMessage(content=user_request)]},
+                config=config,
             )
+        except Exception as exc:
+            logger.error("[%s] ReAct agent failed: %s", trace_id, exc)
+            log_agent_step("ReactAgent", "error", user_request[:200], str(exc)[:300], "failed", trace_id=trace_id)
+            return {"mode": "react", "trace_id": trace_id, "error": str(exc)}
 
-        self.logger.warning("[%s] MAX STEPS reached", trace_id)
-        log_step("Week4Agent", "max_steps", "", "", "max_steps_reached", trace_id=trace_id)
-        return {"trace_id": trace_id, "stopped": "max_steps", "steps": step_log, "final_message": "Stopped after max steps."}
+        messages = result["messages"]
+        steps = self._parse_message_history(messages, trace_id)
+        final_message = messages[-1].content if messages else "No response"
 
-    def _trim_memory(self, lines: list[str]) -> str:
-        text = "\n".join(lines)
-        if len(text) <= self.max_memory_chars:
-            return text
-        return text[-self.max_memory_chars :]
+        log_agent_step("ReactAgent", "done", "", final_message[:300], "completed", trace_id=trace_id)
+        logger.info("[%s] execute_multi_step_agent finished — %d steps", trace_id, len(steps))
+
+        return {
+            "mode": "react",
+            "trace_id": trace_id,
+            "steps": steps,
+            "final_message": final_message,
+        }
+
+    # ── Helpers ────────────────────────────────────────────────────────────────
+
+    def _parse_message_history(self, messages: list, trace_id: str = "") -> list[dict]:
+        """
+        Parse LangGraph message history into a readable step log.
+
+        Also runs guardrail validation on every tool call and logs each step
+        to agent_steps.jsonl for full observability.
+        """
+        steps = []
+        step_num = 0
+        for msg in messages:
+            if isinstance(msg, AIMessage) and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    step_num += 1
+                    tool_name = tc["name"]
+                    tool_args = tc["args"]
+
+                    # Guardrail check at the output→action boundary
+                    ok, guard_msg = self.checker.validate_tool_decision(tool_name, tool_args)
+                    log_agent_step("ReactAgent", f"step_{step_num}_guardrail", tool_name, str(ok), guard_msg, trace_id=trace_id)
+
+                    steps.append({
+                        "action": "tool_call",
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "thought": msg.content or "",
+                        "guardrail_passed": ok,
+                    })
+                    log_agent_step("ReactAgent", f"step_{step_num}_tool_{tool_name}", str(tool_args)[:MAX_STEP_ARGS_CHARS], "", "called", trace_id=trace_id)
+
+            elif isinstance(msg, ToolMessage):
+                steps.append({
+                    "action": "observation",
+                    "tool": msg.name,
+                    "result": str(msg.content)[:MAX_STEP_RESULT_CHARS],
+                })
+                log_agent_step("ReactAgent", f"step_{step_num}_observe", msg.name, str(msg.content)[:MAX_STEP_LOG_CHARS], "observed", trace_id=trace_id)
+
+            elif isinstance(msg, AIMessage) and msg.content and not msg.tool_calls:
+                steps.append({
+                    "action": "final_response",
+                    "content": msg.content,
+                })
+        return steps
 
     @staticmethod
-    def format_output(result: dict) -> str:
+    def format_result_as_json(result: dict) -> str:
+        """Pretty-print a result dict as JSON."""
         return json.dumps(result, indent=2, default=str)
-
-    @staticmethod
-    def _parse_json(text: str, model_class: type):
-        raw = text.strip()
-        if raw.startswith("{") and raw.endswith("}"):
-            payload = raw
-        else:
-            m = re.search(r"\{.*\}", raw, re.DOTALL)
-            if not m:
-                raise ValueError("No JSON object found in model response")
-            payload = m.group(0)
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid JSON from model: {exc}") from exc
-        try:
-            return model_class.model_validate(data)
-        except ValidationError as exc:
-            raise ValueError(f"JSON schema validation failed: {exc}") from exc

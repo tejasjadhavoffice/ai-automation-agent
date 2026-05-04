@@ -1,8 +1,11 @@
 """
-Simple OOP entry for the two-week agent.
+automation_agent.py — Facade pattern.
 
-One class owns: config → Groq client → tools → orchestrator (brain).
-`main.py` only parses CLI and calls `AutomationAgent.create().run(...)`.
+One class wires everything together:
+  config → LLM client → tools → orchestrator
+
+main.py only calls AutomationAgent.initialize().execute() — it doesn't
+need to know about LangChain, LangGraph, or individual tools.
 """
 from __future__ import annotations
 
@@ -11,66 +14,76 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from app.clients.groq_client import GroqChatClient
-from app.config.settings import AppSettings, get_settings
+from app.clients.groq_client import LLMClient
+from app.config.settings import Settings, get_settings
 from app.services.agent_orchestration_service import AgentOrchestrationService
-from app.services.tool_execution_service import ToolExecutionService
+from app.services.tool_execution_service import ToolRegistryService
 
-# Project root `.env` (folder above `app/`)
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+logger = logging.getLogger(__name__)
 
 
 class AutomationAgent:
     """
-    Facade you interact with from `main.py`.
+    Facade: the single entry point for all agent operations.
 
-    Attributes are public on purpose so you can read `agent.settings` etc. when learning.
+    Why Facade pattern?
+      - main.py calls agent.run() — simple, clean
+      - All internal wiring (LLM, tools, orchestrator) is hidden
+      - Easy to swap any component without changing the CLI
     """
 
-    def __init__(self, settings: AppSettings) -> None:
-        self.logger = logging.getLogger(self.__class__.__name__)
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.groq = GroqChatClient(settings=settings)
-        self.tools = ToolExecutionService(settings=settings)
+
+        self.llm_client = LLMClient(settings=settings)
+        self.tool_registry = ToolRegistryService()
         self.orchestrator = AgentOrchestrationService(
-            groq_client=self.groq,
-            tool_execution_service=self.tools,
+            llm_fast=self.llm_client.llm,
+            llm_react=self.llm_client.llm,
+            tools=self.tool_registry.get_registered_tools(),
+            max_steps=settings.agent_max_steps,
         )
 
     @classmethod
-    def create(cls) -> AutomationAgent:
-        """Load `.env`, read settings, build the agent — call this once at program start."""
+    def initialize(cls) -> AutomationAgent:
+        """Load .env, read settings, build the agent — call once at startup."""
         load_dotenv(_ENV_PATH)
         settings = get_settings()
         agent = cls(settings=settings)
-        agent.logger.debug("AutomationAgent created")
+        logger.debug("AutomationAgent initialized")
         return agent
 
-    def run(self, user_request: str, mode: str, prompt_style: str) -> dict:
+    def execute(self, user_request: str, mode: str, prompt_style: str = "zero-shot") -> dict:
         """
-        Run Week 1 (`once`), Week 2 (`react`), or Week 4 (`week4`) flow.
-        """
-        self.logger.info("Run requested with mode=%s prompt_style=%s", mode, prompt_style)
-        if mode == "once":
-            return self.orchestrator.run_once(user_request, prompt_style)
-        if mode == "week4":
-            return self.orchestrator.run_week4(user_request)
-        return self.orchestrator.run_react(user_request, prompt_style)
+        Execute the agent in the requested mode.
 
-    def run_workflow(self, workflow_name: str) -> dict:
+        Modes:
+          once  → Week 1: single LLM call + one tool
+          react → Week 2/4: LangGraph ReAct loop with memory
+        """
+        logger.info("Execute mode=%s prompt_style=%s", mode, prompt_style)
+
+        if mode == "once":
+            return self.orchestrator.execute_single_tool(user_request, prompt_style)
+        return self.orchestrator.execute_multi_step_agent(user_request)
+
+    def execute_workflow(self, workflow_name: str) -> dict:
         """
         Week 3: run one of the three automation workflows by name.
-        Imports are inside the method so the rest of the agent still works
-        even if workflow files are not present.
+
+        Lazy imports so the rest of the agent works even if workflow
+        files have issues.
         """
         from app.workflows.analysis_workflow import AnalysisWorkflow
         from app.workflows.report_workflow import ReportWorkflow
-        from app.workflows.task_scheduler_workflow import TaskSchedulerWorkflow
+        from app.workflows.task_router_workflow import TaskRouterWorkflow
 
         workflows = {
             "report": ReportWorkflow,
             "analysis": AnalysisWorkflow,
-            "tasks": TaskSchedulerWorkflow,
+            "tasks": TaskRouterWorkflow,
         }
         cls = workflows.get(workflow_name)
         if not cls:
@@ -80,6 +93,6 @@ class AutomationAgent:
         workflow = cls(groq_api_key=self.settings.groq_api_key)
         return workflow.run()
 
-    def result_as_json(self, result: dict) -> str:
-        """Pretty-print a result dict (same string as `AgentOrchestrationService.format_output`)."""
-        return self.orchestrator.format_output(result)
+    def format_result_as_json(self, result: dict) -> str:
+        """Pretty-print a result dict."""
+        return self.orchestrator.format_result_as_json(result)

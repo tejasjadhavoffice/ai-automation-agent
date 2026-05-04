@@ -7,9 +7,20 @@ If the output fails the check, the workflow stops and logs the reason.
 """
 
 import json
+from typing import Literal
 
 from guardrails import Guard
 from pydantic import BaseModel, field_validator
+
+
+# --- Constants for guardrail thresholds ---
+
+MIN_REPORT_LENGTH = 30
+MIN_ANALYSIS_LENGTH = 20
+
+AllowedToolName = Literal[
+    "read_file", "send_email", "fetch_data", "summarise_text", "no_tool"
+]
 
 
 # --- Pydantic models define what valid LLM output looks like ---
@@ -21,8 +32,8 @@ class ReportOutput(BaseModel):
     @field_validator("summary")
     @classmethod
     def summary_long_enough(cls, v: str) -> str:
-        if len(v.strip()) < 30:
-            raise ValueError("Report summary too short (minimum 30 characters)")
+        if len(v.strip()) < MIN_REPORT_LENGTH:
+            raise ValueError(f"Report summary too short (minimum {MIN_REPORT_LENGTH} characters)")
         return v
 
 
@@ -33,8 +44,8 @@ class AnalysisOutput(BaseModel):
     @field_validator("analysis")
     @classmethod
     def analysis_not_empty(cls, v: str) -> str:
-        if len(v.strip()) < 20:
-            raise ValueError("Analysis output too short (minimum 20 characters)")
+        if len(v.strip()) < MIN_ANALYSIS_LENGTH:
+            raise ValueError(f"Analysis output too short (minimum {MIN_ANALYSIS_LENGTH} characters)")
         return v
 
 
@@ -51,7 +62,7 @@ class TaskAssignment(BaseModel):
         return v
 
 
-class GuardrailChecker:
+class GuardrailOutputValidationService:
     """
     Validates LLM outputs using guardrails-ai before the agent acts on them.
 
@@ -66,28 +77,28 @@ class GuardrailChecker:
         self._analysis_guard = Guard.for_pydantic(AnalysisOutput)
         self._task_guard = Guard.for_pydantic(TaskAssignment)
 
-    def check_report(self, summary: str) -> tuple[bool, str]:
+    def validate_report_output(self, summary: str) -> tuple[bool, str]:
         """Validate that a report summary is long enough to be useful."""
         result = self._report_guard.parse(json.dumps({"summary": summary}))
         if result.validation_passed:
             return True, "OK"
         return False, str(result.error)
 
-    def check_analysis(self, analysis: str) -> tuple[bool, str]:
+    def validate_analysis_output(self, analysis: str) -> tuple[bool, str]:
         """Validate that an analysis output is non-trivial."""
         result = self._analysis_guard.parse(json.dumps({"analysis": analysis}))
         if result.validation_passed:
             return True, "OK"
         return False, str(result.error)
 
-    def check_task_assignment(self, tool_name: str) -> tuple[bool, str]:
+    def validate_task_assignment(self, tool_name: str) -> tuple[bool, str]:
         """Validate that the LLM assigned a real, allowed tool name."""
         result = self._task_guard.parse(json.dumps({"tool_name": tool_name}))
         if result.validation_passed:
             return True, "OK"
         return False, str(result.error)
 
-    def check_tool_decision(self, tool_name: str, arguments: dict) -> tuple[bool, str]:
+    def validate_tool_decision(self, tool_name: str, arguments: dict) -> tuple[bool, str]:
         """
         Week 4 guardrail — called at every output-to-action boundary in run_week4().
 
@@ -98,7 +109,7 @@ class GuardrailChecker:
         Returns (True, "OK") if valid, (False, reason) if not.
         """
         # Step 1: validate tool name
-        ok, msg = self.check_task_assignment(tool_name)
+        ok, msg = self.validate_task_assignment(tool_name)
         if not ok:
             return False, msg
 

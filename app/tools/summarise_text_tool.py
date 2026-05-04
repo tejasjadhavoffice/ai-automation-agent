@@ -1,68 +1,36 @@
 """
-summarise_text_tool.py
+Tool: summarise text using AI.
 
-Calls the Groq LLM to produce a real AI summary of the given text.
-The api_key is passed in from ToolExecutionService so this tool
-does not need to read environment variables itself.
+Uses ChatGroq internally to produce real AI summaries.
+The API key is fetched from Settings via get_settings().
 """
 
-from groq import Groq
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import tool
+from langchain_groq import ChatGroq
+
+from app.config.settings import get_settings
+
+MAX_SUMMARISE_CHARS = 6000
 
 
-def execute_summarise_text(arguments: dict, api_key: str) -> dict:
-    """
-    Summarise the text in arguments["text"] using the Groq LLM.
+@tool
+def summarise_text(text: str) -> str:
+    """Summarises the given text into 3-5 clear sentences using AI."""
+    if not text or not text.strip():
+        return "Error: no text provided to summarise"
 
-    Returns a standard result dict:
-        {"success": bool, "message": str, "data": {...}}
-    """
-    text_value = arguments.get("text", "")
+    settings = get_settings()
+    trimmed = text[:MAX_SUMMARISE_CHARS]
 
-    # --- Input validation (guardrail) ---
-    if not isinstance(text_value, str) or not text_value.strip():
-        return {
-            "success": False,
-            "message": "summarise_text requires a non-empty 'text' string",
-            "data": {},
-        }
-
-    if len(text_value) > 6000:
-        # Trim to avoid blowing the context window
-        text_value = text_value[:6000] + "\n[text trimmed to 6000 chars]"
-
-    # --- Build a simple prompt ---
-    system_prompt = (
-        "You are a helpful assistant. "
-        "Summarise the following text in 3-5 clear sentences. "
-        "Return only the summary, no extra commentary."
+    llm = ChatGroq(
+        model=settings.groq_model,
+        api_key=settings.groq_api_key,
+        temperature=settings.groq_temperature,
     )
-    user_prompt = f"Text to summarise:\n\n{text_value}"
+    response = llm.invoke([
+        SystemMessage(content="Summarise the following text in 3-5 clear sentences. Return only the summary."),
+        HumanMessage(content=trimmed),
+    ])
+    return response.content
 
-    # --- Call Groq ---
-    try:
-        client = Groq(api_key=api_key)
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3,
-            timeout=30.0,
-        )
-        summary = response.choices[0].message.content or ""
-    except Exception as exc:
-        return {
-            "success": False,
-            "message": f"summarise_text LLM call failed: {exc}",
-            "data": {},
-        }
-
-    return {
-        "success": True,
-        "message": "Text summarised successfully",
-        "data": {
-            "summary": summary,
-            "original_word_count": len(text_value.split()),
-        },
-    }

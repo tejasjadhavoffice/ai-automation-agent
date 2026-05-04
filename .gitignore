@@ -1,34 +1,68 @@
-# Virtual environment
+# Virtual environment (common names)
 venv/
+.venv/
+env/
+ENV/
 
-# Secrets — never commit
+# Secrets & local env overrides
 .env
 .env.*
+!.env.example
 
 # Python
 __pycache__/
 **/*.pyc
 *.py[cod]
 *$py.class
-.pytest_cache/
+.python-version
 *.egg-info/
+*.egg
+pip-wheel-metadata/
 dist/
 build/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.tox/
+.nox/
+coverage.xml
 .coverage
 htmlcov/
-*.log
 
 # Jupyter
 .ipynb_checkpoints/
 
-# Week 3 — generated / runtime (sample data stays tracked: data/sales_data.txt, data/tasks.txt)
+# Generated / runtime (sample data under data/ stays tracked where needed)
 logs/
 data/reports/
 data/processed_tasks.txt
 
-# IDE
+# IDE & editors
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
-# Local / personal documents
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Misc scratch / temp
+*.log
+*.tmp
+*.bak
+*.sqlite3
+
+# Keys / certs (never commit by accident)
+*.pem
+*.key
+
+# Local / personal (do not commit or push)
 *.docx
+Roadmap_for_Tejas_AIEngineer.txt
+python_info.txt
+notebooks/
+docs/

@@ -1,24 +1,26 @@
+"""Tool: send an email via SMTP."""
+
 import smtplib
 from email.message import EmailMessage
 
-from app.config.settings import AppSettings
+from langchain_core.tools import tool
+
+from app.config.settings import get_settings
 
 
-def execute_send_email(arguments: dict, settings: AppSettings) -> dict:
-    recipient = arguments.get("to")
-    subject = arguments.get("subject", "")
-    body = arguments.get("body", "")
+@tool
+def send_email(to: str, subject: str, body: str) -> str:
+    """Sends an email to the given recipient via SMTP."""
+    settings = get_settings()
 
-    if not isinstance(recipient, str) or not recipient.strip():
-        return {"success": False, "message": "send_email requires a non-empty 'to' string", "data": {}}
     if not settings.email_from.strip():
-        return {"success": False, "message": "EMAIL_FROM is not configured in environment", "data": {}}
+        return "Error: EMAIL_FROM is not configured in environment"
 
     message = EmailMessage()
     message["From"] = settings.email_from
-    message["To"] = recipient
-    message["Subject"] = str(subject)
-    message.set_content(str(body))
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content(body)
 
     try:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as smtp:
@@ -27,14 +29,6 @@ def execute_send_email(arguments: dict, settings: AppSettings) -> dict:
                 smtp.login(settings.smtp_user, settings.smtp_password)
             smtp.send_message(message)
     except Exception as exc:
-        return {
-            "success": False,
-            "message": f"send_email failed: {exc}",
-            "data": {"to": recipient, "subject": str(subject)},
-        }
+        return f"Error: send_email failed: {exc}"
 
-    return {
-        "success": True,
-        "message": "Email sent successfully",
-        "data": {"to": recipient, "subject": str(subject)},
-    }
+    return f"Email sent successfully to {to}"

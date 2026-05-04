@@ -4,19 +4,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 LOG_DIR = Path("logs")
+MAX_LOG_CHARS = 300
+
+logger = logging.getLogger(__name__)
 
 
-def configure_logging(level_name: str = "INFO") -> None:
-    """Configure simple console logging for the whole app."""
+def setup_console_logging() -> None:
+    """Configure console logging for the whole app — always DEBUG level."""
     LOG_DIR.mkdir(exist_ok=True)
-    level = getattr(logging, level_name.upper(), logging.INFO)
     logging.basicConfig(
-        level=level,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        level=logging.DEBUG,
+        format="%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(funcName)s - %(message)s",
     )
 
 
-def log_step(
+def log_agent_step(
     workflow: str,
     step: str,
     input_data: str,
@@ -28,12 +30,12 @@ def log_step(
     Write one structured JSON line to logs/agent_steps.jsonl.
 
     Args:
-        workflow:   name of the workflow / agent (e.g. "Week4Agent")
+        workflow:   name of the workflow / agent (e.g. "ReactAgent")
         step:       name of the step (e.g. "guardrail", "tool_exec")
         input_data: what the step received (truncated to 300 chars)
         output:     what the step produced  (truncated to 300 chars)
         decision:   short label for what happened ("OK", "skipped", "error")
-        trace_id:   Week 4 — short run ID so you can follow one run in the logs
+        trace_id:   short run ID so you can follow one run in the logs
     """
     LOG_DIR.mkdir(exist_ok=True)
     entry = {
@@ -41,8 +43,8 @@ def log_step(
         "trace_id": trace_id,
         "workflow": workflow,
         "step": step,
-        "input": str(input_data)[:300],
-        "output": str(output)[:300],
+        "input": str(input_data)[:MAX_LOG_CHARS],
+        "output": str(output)[:MAX_LOG_CHARS],
         "decision": decision,
     }
     log_file = LOG_DIR / "agent_steps.jsonl"

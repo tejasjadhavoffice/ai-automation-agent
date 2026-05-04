@@ -4,18 +4,20 @@ import json
 import logging
 
 from app.automation_agent import AutomationAgent
-from app.logging_setup import configure_logging
+from app.logging_setup import setup_console_logging
+
+logger = logging.getLogger(__name__)
 
 
-class AgentCli:
-    """Simple OOP CLI: parse args, run agent, print JSON."""
+class AgentRunner:
+    """Entry point: parse arguments, run agent, print JSON."""
 
     def __init__(self) -> None:
-        self.logger = logging.getLogger(self.__class__.__name__)
+        pass
 
-    def parse_args(self) -> argparse.Namespace:
+    def parse_arguments(self) -> argparse.Namespace:
         parser = argparse.ArgumentParser(
-            description="Automation agent (single step or ReAct)"
+            description="AI Automation Agent — LangChain + LangGraph"
         )
         parser.add_argument("--request", default="", help="What you want the agent to do")
         parser.add_argument(
@@ -26,14 +28,8 @@ class AgentCli:
         parser.add_argument(
             "--mode",
             default="react",
-            choices=["once", "react", "week4"],
-            help="once = single tool; react = Week 2 loop; week4 = production loop with guardrails",
-        )
-        parser.add_argument(
-            "--log-level",
-            default="INFO",
-            choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-            help="Console log level",
+            choices=["once", "react"],
+            help="once = Week 1 single tool; react = Week 2/4 LangGraph ReAct loop",
         )
         parser.add_argument(
             "--workflow",
@@ -43,33 +39,31 @@ class AgentCli:
         )
         return parser.parse_args()
 
-    def run(self) -> None:
-        args = self.parse_args()
-        configure_logging(args.log_level)
-        self.logger.info("Start mode=%s prompt_style=%s", args.mode, args.prompt_style)
+    def start(self) -> None:
+        args = self.parse_arguments()
+        setup_console_logging()
+        logger.info("Start mode=%s prompt_style=%s", args.mode, args.prompt_style)
 
         try:
-            agent = AutomationAgent.create()
+            agent = AutomationAgent.initialize()
 
-            # Week 3: if --workflow is given, run a workflow instead of the agent loop
             if args.workflow:
-                self.logger.info("Running workflow: %s", args.workflow)
-                result = agent.run_workflow(args.workflow)
+                logger.info("Running workflow: %s", args.workflow)
+                result = agent.execute_workflow(args.workflow)
             else:
-                result = agent.run(
+                result = agent.execute(
                     user_request=args.request,
                     mode=args.mode,
                     prompt_style=args.prompt_style,
                 )
 
-            self.logger.debug("Raw result dict: %s", result)
             print("\n--- RESULT (JSON) ---")
-            print(agent.result_as_json(result))
+            print(agent.format_result_as_json(result))
         except Exception as exc:
-            self.logger.error("Run failed: %s", exc)
-            self.logger.debug("Exception details", exc_info=True)
+            logger.error("Run failed: %s", exc)
+            logger.debug("Exception details", exc_info=True)
             print(json.dumps({"success": False, "message": str(exc)}, indent=2))
 
 
 if __name__ == "__main__":
-    AgentCli().run()
+    AgentRunner().start()
