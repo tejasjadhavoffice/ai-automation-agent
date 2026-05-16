@@ -1,21 +1,32 @@
 import json
 import logging
+import logging.handlers
 from datetime import datetime, timezone
 from pathlib import Path
 
 LOG_DIR = Path("logs")
 MAX_LOG_CHARS = 300
 
-logger = logging.getLogger(__name__)
+_LOG_FORMAT = "%(asctime)s | %(levelname)-5s | %(filename)s:%(lineno)d | %(name)s | %(message)s"
+_DATE_FORMAT = "%H:%M:%S"
 
 
 def setup_console_logging() -> None:
-    """Configure console logging for the whole app — always DEBUG level."""
     LOG_DIR.mkdir(exist_ok=True)
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(module)s:%(lineno)d - %(funcName)s - %(message)s",
-    )
+
+    formatter = logging.Formatter(_LOG_FORMAT, datefmt=_DATE_FORMAT)
+
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+
+    root = logging.getLogger()
+    root.setLevel(logging.WARNING)
+
+    root.handlers.clear()
+    root.addHandler(console)
+
+    for name in ("app", "__main__"):
+        logging.getLogger(name).setLevel(logging.INFO)
 
 
 def log_agent_step(
@@ -26,17 +37,7 @@ def log_agent_step(
     decision: str,
     trace_id: str = "",
 ) -> None:
-    """
-    Write one structured JSON line to logs/agent_steps.jsonl.
-
-    Args:
-        workflow:   name of the workflow / agent (e.g. "ReactAgent")
-        step:       name of the step (e.g. "guardrail", "tool_exec")
-        input_data: what the step received (truncated to 300 chars)
-        output:     what the step produced  (truncated to 300 chars)
-        decision:   short label for what happened ("OK", "skipped", "error")
-        trace_id:   short run ID so you can follow one run in the logs
-    """
+ 
     LOG_DIR.mkdir(exist_ok=True)
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),

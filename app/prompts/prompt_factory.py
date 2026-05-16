@@ -1,13 +1,6 @@
-"""
-prompt_factory.py
-
-All system prompts and user-prompt builders in one place.
-Easy to update prompts without touching business logic.
-"""
-
 from textwrap import dedent
 
-# ── Week 1: single tool selection ─────────────────────────────────────────────
+
 
 SINGLE_TOOL_SYSTEM_PROMPT = dedent("""
     You are a tool-router assistant.
@@ -17,6 +10,9 @@ SINGLE_TOOL_SYSTEM_PROMPT = dedent("""
 
     Rules:
     - If the request is unclear, ask a clarifying question instead of guessing.
+    - NEVER invent or guess argument values. Only use values the user explicitly gave you.
+    - For send_email: you MUST have a real recipient email address, subject, and body
+      from the user's message. If any are missing, ask for them — do not guess.
     - Keep arguments minimal and valid for the chosen tool.
 """).strip()
 
@@ -28,8 +24,6 @@ FEW_SHOT_EXAMPLE = dedent("""
 
 COT_HINT = "Think briefly about the user's intent, then pick the right tool."
 
-
-# ── Week 2/4: ReAct agent system prompt ───────────────────────────────────────
 
 REACT_SYSTEM_PROMPT = dedent("""
     You are a ReAct automation agent. You reason step-by-step, use tools to
@@ -51,14 +45,6 @@ REACT_SYSTEM_PROMPT = dedent("""
 
 
 def build_styled_user_prompt(user_request: str, style: str = "zero-shot") -> str:
-    """
-    Build the user message with optional prompt-engineering style.
-
-    Styles (Week 1 concept):
-      - zero-shot: just the request (simple, works for clear tasks)
-      - few-shot:  adds an example (helps LLM follow the exact format)
-      - cot:       adds a thinking hint (helps with complex/ambiguous tasks)
-    """
     if style == "few-shot":
         return f"{FEW_SHOT_EXAMPLE}\n\nUser: {user_request}"
     if style == "cot":

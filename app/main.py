@@ -8,17 +8,13 @@ from app.logging_setup import setup_console_logging
 
 logger = logging.getLogger(__name__)
 
-
 class AgentRunner:
-    """Entry point: parse arguments, run agent, print JSON."""
-
-    def __init__(self) -> None:
-        pass
 
     def parse_arguments(self) -> argparse.Namespace:
         parser = argparse.ArgumentParser(
             description="AI Automation Agent — LangChain + LangGraph"
         )
+
         parser.add_argument("--request", default="", help="What you want the agent to do")
         parser.add_argument(
             "--prompt-style",
@@ -37,18 +33,38 @@ class AgentRunner:
             default=None,
             help="Week 3: run a workflow instead of the ReAct agent",
         )
+        parser.add_argument(
+            "--serve",
+            action="store_true",
+            help="Start the FastAPI server instead of running a CLI command",
+        )
         return parser.parse_args()
 
     def start(self) -> None:
         args = self.parse_arguments()
         setup_console_logging()
-        logger.info("Start mode=%s prompt_style=%s", args.mode, args.prompt_style)
+
+        if args.serve:
+            logger.info("step=dispatch decision=starting_api_server")
+            import uvicorn
+            from app.api import app  
+            uvicorn.run(app, host="0.0.0.0", port=8000)
+            return
+
+        if args.workflow:
+            logger.info(
+                "step=dispatch decision=workflow workflow=%s", args.workflow
+            )
+        else:
+            logger.info(
+                "step=dispatch decision=agent mode=%s prompt_style=%s input_len=%d",
+                args.mode, args.prompt_style, len(args.request),
+            )
 
         try:
             agent = AutomationAgent.initialize()
 
             if args.workflow:
-                logger.info("Running workflow: %s", args.workflow)
                 result = agent.execute_workflow(args.workflow)
             else:
                 result = agent.execute(
@@ -57,12 +73,17 @@ class AgentRunner:
                     prompt_style=args.prompt_style,
                 )
 
-            print("\n--- RESULT (JSON) ---")
-            print(agent.format_result_as_json(result))
+            result_json = agent.format_result_as_json(result)
+            logger.info(
+                "step=run_done decision=success result_keys=%s\n%s",
+                list(result.keys()), result_json,
+            )
         except Exception as exc:
-            logger.error("Run failed: %s", exc)
-            logger.debug("Exception details", exc_info=True)
-            print(json.dumps({"success": False, "message": str(exc)}, indent=2))
+            failure_json = json.dumps({"success": False, "message": str(exc)}, indent=2)
+            logger.error(
+                "step=run_done decision=error err=%s\n%s",
+                exc, failure_json, exc_info=True,
+            )
 
 
 if __name__ == "__main__":

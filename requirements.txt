@@ -1,11 +1,35 @@
-# langchain-groq 1.1.x requires groq >= 0.30
+# Groq official Python SDK
 groq>=0.30.0,<1.0.0
+
+# Load environment variables from .env file
 python-dotenv==1.0.1
+
+# Data validation and schemas
 pydantic==2.10.6
+
+# Settings/config management using Pydantic
 pydantic-settings==2.7.1
+
+# HTTP client for API requests
 httpx==0.28.1
+
+# Retry failed API calls automatically
 tenacity==9.0.0
+
+# Run Jupyter notebooks
 jupyter==1.1.1
+
+# AI guardrails / output validation / safety checks
 guardrails-ai==0.10.0
+
+# LangChain integration for Groq models
 langchain-groq==1.1.1
-langgraph==1.0.10
+
+# Build AI agents and workflows using graphs
+langgraph==1.1.10
+
+# Backend API framework
+fastapi==0.115.12
+
+# ASGI server to run FastAPI app
+uvicorn==0.34.2

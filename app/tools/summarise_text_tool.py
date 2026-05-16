@@ -1,9 +1,4 @@
-"""
-Tool: summarise text using AI.
-
-Uses ChatGroq internally to produce real AI summaries.
-The API key is fetched from Settings via get_settings().
-"""
+import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
@@ -13,11 +8,13 @@ from app.config.settings import get_settings
 
 MAX_SUMMARISE_CHARS = 6000
 
+logger = logging.getLogger(__name__)
 
 @tool
 def summarise_text(text: str) -> str:
     """Summarises the given text into 3-5 clear sentences using AI."""
     if not text or not text.strip():
+        logger.warning("step=summarise_text decision=empty_input")
         return "Error: no text provided to summarise"
 
     settings = get_settings()

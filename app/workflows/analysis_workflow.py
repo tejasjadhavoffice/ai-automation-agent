@@ -1,15 +1,3 @@
-"""
-analysis_workflow.py — Workflow 2
-
-Steps:
-  1. Idempotency check — if today's analysis already exists, skip.
-  2. Read raw sales data from data/sales_data.txt.
-  3. Failure simulation — if data is too short, stop gracefully.
-  4. Call Groq LLM to find trends and key numbers in the data.
-  5. Guardrail — validate the LLM output.
-  6. Save analysis to data/reports/analysis_<date>.txt.
-"""
-
 import logging
 from datetime import date
 from pathlib import Path
@@ -28,8 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 class AnalysisWorkflow(BaseWorkflow):
-    """Workflow 2: Raw data → LLM finds trends → save analysis."""
-
     def __init__(self, groq_api_key: str) -> None:
         super().__init__(groq_api_key)
         self.checker = GuardrailOutputValidationService()
@@ -39,41 +25,63 @@ class AnalysisWorkflow(BaseWorkflow):
         today = date.today().isoformat()
         output_file = f"analysis_{today}.txt"
 
-        # Step 1: Idempotency — skip if analysis already done today
         if self._is_already_processed(output_file):
-            logger.info("Analysis already exists for today — skipping")
+            logger.info(
+                "workflow=AnalysisWorkflow step=idempotency input=%s decision=skip output=already_exists",
+                output_file,
+            )
             log_agent_step("AnalysisWorkflow", "idempotency_check", output_file, "skipped", "already done")
             return {"success": True, "message": "Already done — analysis exists", "file": output_file}
 
-        # Step 2: Read raw data
         log_agent_step("AnalysisWorkflow", "read_data", DATA_FILE, "", "reading")
         try:
             raw = Path(DATA_FILE).read_text(encoding="utf-8")
+            logger.info(
+                "workflow=AnalysisWorkflow step=read_data input=%s decision=ok output=chars=%d",
+                DATA_FILE, len(raw),
+            )
         except FileNotFoundError:
             log_agent_step("AnalysisWorkflow", "read_data", DATA_FILE, "error", "file not found")
+            logger.error(
+                "workflow=AnalysisWorkflow step=read_data input=%s decision=file_not_found",
+                DATA_FILE,
+            )
             return {"success": False, "message": f"Failure: data file not found: {DATA_FILE}"}
 
-        # Step 3: Failure simulation — empty or trivial data is rejected
         if len(raw.strip()) < 10:
             log_agent_step("AnalysisWorkflow", "validate_data", raw, "error", "data too short")
-            logger.error("Data too short to analyse — simulated failure")
+            logger.error(
+                "workflow=AnalysisWorkflow step=validate_data input_len=%d decision=data_too_short",
+                len(raw.strip()),
+            )
             return {"success": False, "message": "Failure: data is too short for analysis"}
 
-        # Step 4: Ask LLM to analyse trends
+        logger.info(
+            "workflow=AnalysisWorkflow step=llm_analyse decision=calling_llm input_chars=%d",
+            len(raw),
+        )
         log_agent_step("AnalysisWorkflow", "analyse", raw[:200], "", "calling LLM")
         analysis = self._analyse_data_with_llm(raw)
 
-        # Step 5: Guardrail — validate output
         ok, msg = self.checker.validate_analysis_output(analysis)
         log_agent_step("AnalysisWorkflow", "guardrail", analysis[:200], str(ok), msg)
         if not ok:
-            logger.warning("Guardrail blocked output: %s", msg)
+            logger.warning(
+                "workflow=AnalysisWorkflow step=guardrail decision=blocked input_len=%d reason=%s",
+                len(analysis), msg,
+            )
             return {"success": False, "message": f"Guardrail failed: {msg}"}
+        logger.info(
+            "workflow=AnalysisWorkflow step=guardrail decision=passed analysis_len=%d",
+            len(analysis),
+        )
 
-        # Step 6: Save
         self._save_result_to_file(output_file, analysis)
         log_agent_step("AnalysisWorkflow", "save_analysis", output_file, "saved", "done")
-        logger.info("Analysis saved to %s", output_file)
+        logger.info(
+            "workflow=AnalysisWorkflow step=save decision=saved output=%s",
+            output_file,
+        )
         return {
             "success": True,
             "message": "Analysis complete",
@@ -82,7 +90,6 @@ class AnalysisWorkflow(BaseWorkflow):
         }
 
     def _analyse_data_with_llm(self, raw_data: str) -> str:
-        """Ask Groq LLM to identify key trends and numbers in the data."""
         try:
             response = self.client.chat.completions.create(
                 model=get_settings().groq_model,
@@ -100,5 +107,8 @@ class AnalysisWorkflow(BaseWorkflow):
             )
             return response.choices[0].message.content or ""
         except Exception as exc:
-            logger.error("LLM call failed: %s", exc)
+            logger.error(
+                "workflow=AnalysisWorkflow step=llm_analyse decision=error err=%s",
+                exc, exc_info=True,
+            )
             return ""
